@@ -1,0 +1,38 @@
+services:
+  api:
+    build: ./server
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    ports:
+      - 3000:3000
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=supersecret
+      - DB_NAME=postgres
+  db:
+    image: postgres:17.3
+    restart: unless-stopped
+    volumes:
+      - ./db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: supersecret
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+  client:
+    build: ./client
+    restart: unless-stopped
+    ports:
+      - 5173:80
+    depends_on:
+      api:
+        condition: service_started
