@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm test *)",
+      "Bash(mkdir -p /home/francis/Documents/ESGI/esgi-2603-my-favorite-places/.github/workflows)"
+    ],
+    "additionalDirectories": [
+      "/home/francis/Documents/ESGI/esgi-2603-my-favorite-places/.github"
+    ]
+  }
+}
