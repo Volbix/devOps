@@ -4,6 +4,10 @@ import addressesRouter from "./controllers/Addresses";
 
 const apiRouter = Router();
 
+apiRouter.get("/bonjour", (_req, res) => {
+  res.json({ message: "Bonjour !" });
+});
+
 apiRouter.use("/users", usersRouter);
 apiRouter.use("/addresses", addressesRouter);
 
