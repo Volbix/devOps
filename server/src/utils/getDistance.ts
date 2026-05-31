@@ -4,7 +4,7 @@ export function getDistance(
 ): number {
   const earthRadius = 6371; // km
 
-  const diffLat = ((point1.lat - point2.lat) * Math.PI) / 180;
+  const diffLat = (point1.lat - point2.lat) * Math.PI) / 180;
   const diffLng = ((point1.lng - point2.lng) * Math.PI) / 180;
 
   const arc =
