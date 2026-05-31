@@ -1,0 +1,110 @@
+services:
+  traefik:
+    image: traefik:v3.6
+    ports:
+      - 80:80
+      - 8080:8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command:
+      - "--entrypoints.web.address=:80"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--api.dashboard=true"
+      - "--api.insecure=true"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik-dashboard.rule=Host(`traefik.mfp.localhost`)"
+      - "traefik.http.routers.traefik-dashboard.entrypoints=web"
+      - "traefik.http.routers.traefik-dashboard.service=api@internal"
+    networks:
+      - web
+    restart: unless-stopped
+
+  portainer:
+    image: portainer/portainer-ce:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer_data:/data
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.mfp.localhost`)"
+      - "traefik.http.routers.portainer.entrypoints=web"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9000"
+    networks:
+      - web
+    restart: unless-stopped
+
+  db:
+    image: postgres:17.3
+    restart: unless-stopped
+    volumes:
+      - ./db-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: supersecret
+      POSTGRES_DB: postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - web
+
+  api:
+    build: ./server
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=postgres
+      - DB_PASSWORD=supersecret
+      - DB_NAME=postgres
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`api.mfp.localhost`)"
+      - "traefik.http.routers.api.entrypoints=web"
+      - "traefik.http.services.api.loadbalancer.server.port=3000"
+      - "autoupdate_enabled=true"
+    networks:
+      - web
+
+  client:
+    build: ./client
+    depends_on:
+      api:
+        condition: service_started
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.client.rule=Host(`mfp.localhost`)"
+      - "traefik.http.routers.client.entrypoints=web"
+      - "traefik.http.services.client.loadbalancer.server.port=80"
+      - "autoupdate_enabled=true"
+    networks:
+      - web
+    restart: unless-stopped
+
+  shepherd:
+    image: containrrr/shepherd
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - SLEEP_TIME=1m
+      - WITH_REGISTRY_AUTH=false
+      - FILTER_SERVICES=label=autoupdate_enabled=true
+      - LOG_LEVEL=DEBUG
+    networks:
+      - web
+    restart: unless-stopped
+
+networks:
+  web:
+    driver: bridge
+
+volumes:
+  portainer_data:

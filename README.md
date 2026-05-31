@@ -1,6 +1,67 @@
-# My Favorite Places - Exercice Docker
+# My Favorite Places - Documentation DevOps
 
-Ce README documente la réalisation de l'exercice de dockerisation (serveur, base PostgreSQL, client React), puis les améliorations demandées "pour aller plus loin".
+> Application Node.js + React + PostgreSQL containerisée avec CI/CD automatisé via GitHub Actions, Traefik et Shepherd.
+
+---
+
+## Documentation du système CI/CD
+
+### Environnements d'exécution
+
+| Environnement | Commande | Usage |
+|---|---|---|
+| **Local dev** (avec build) | `docker compose up --build` | Développement quotidien, ports directs (3000, 5173) |
+| **Local prod-like** (images GHCR) | `docker compose -f compose.prod.yml up` | Reproduire la prod sans rebuilder |
+| **Local avec Traefik + Portainer** | `docker compose -f compose.traefik.yml up -d` | Reverse proxy, CD automatique avec Shepherd |
+
+### Flows CI/CD et leurs déclencheurs
+
+```
+Push / PR sur main ou master
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│               GitHub Actions CI              │
+│                                             │
+│  1. test-server  → npm test (Jest)          │
+│     └─ si KO : bloque le merge de la PR    │
+│                                             │
+│  2. build-push-api  (dépend de test-server) │
+│     └─ si push sur main : pousse           │
+│        ghcr.io/volbix/mfp-api:latest        │
+│                                             │
+│  3. build-push-client  (indépendant)        │
+│     └─ si push sur main : pousse           │
+│        ghcr.io/volbix/mfp-client:latest     │
+└─────────────────────────────────────────────┘
+        │ (sur push main uniquement)
+        ▼
+┌─────────────────────────────────────────────┐
+│                  Shepherd (CD)              │
+│  - poll GHCR toutes les 1min               │
+│  - si nouvelle image → redémarre le        │
+│    container (label autoupdate_enabled)     │
+└─────────────────────────────────────────────┘
+```
+
+### Effets de bord des flows
+
+- **CI sur PR** : statut de check visible sur GitHub, merge bloqué si tests KO
+- **CI sur push main** : nouvelles images publiées sur GHCR (`ghcr.io/volbix/mfp-*:latest`)
+- **Shepherd** : redémarrage automatique des containers `api` et `client` dès qu'une nouvelle image est détectée
+
+### Ce que le dev doit faire / surveiller
+
+| Action dev | Effet automatique |
+|---|---|
+| Push sur une branche + PR | Tests lancés, merge bloqué si KO |
+| Merge PR sur `main` | Images rebuiltées et poussées sur GHCR |
+| Rien (Shepherd actif) | Containers redémarrés avec la nouvelle image sous 1min |
+| Casser `getDistance.ts` | Tests échouent → merge impossible → pas de nouvelle image |
+
+> **Attention** : toujours merger sur `main` via PR, jamais en direct (branch protection activée).
+
+---
 
 ## Prérequis
 
@@ -149,6 +210,109 @@ docker images | grep -E "my-favorite-places|server|client"
 
 ---
 
+## 7) Traefik (reverse proxy) + Portainer
+
+### Principe
+
+Traefik est un reverse proxy natif Docker : chaque service se déclare lui-même via des **labels** Docker, sans configuration centralisée.
+
+### Lancement
+
+```bash
+docker compose -f compose.traefik.yml up --build -d
+```
+
+### Entrées `/etc/hosts` à ajouter (une seule fois)
+
+```bash
+echo "127.0.0.1 mfp.localhost api.mfp.localhost traefik.mfp.localhost portainer.mfp.localhost" | sudo tee -a /etc/hosts
+```
+
+### Services accessibles
+
+| URL | Service |
+|-----|---------|
+| `http://mfp.localhost` | Client React |
+| `http://api.mfp.localhost` | API Node.js |
+| `http://traefik.mfp.localhost/dashboard/` | Dashboard Traefik |
+| `http://portainer.mfp.localhost` | Portainer |
+| `http://localhost:8080` | Dashboard Traefik (direct) |
+
+### Vérification des routes détectées par Traefik
+
+```
+$ curl -s http://localhost:8080/api/http/routers | python3 -m json.tool | grep '"name"'
+"name": "api@docker"
+"name": "client@docker"
+"name": "portainer@docker"
+"name": "traefik-dashboard@docker"
+```
+
+### Résultat `docker compose -f compose.traefik.yml ps`
+
+```bash
+docker compose -f compose.traefik.yml up -d && docker compose -f compose.traefik.yml ps
+```
+
+![Tous les containers UP avec Traefik, Portainer, Shepherd](docs/conteneurs.png)
+
+### Fonctionnement
+
+- Plus de ports directs exposés sur `api` et `client` : tout passe par Traefik sur le port 80
+- Traefik lit les labels Docker pour construire sa table de routage dynamiquement
+- Portainer permet de visualiser et piloter les containers via une interface web
+
+---
+
+## 8) Déploiement Continu (CD) avec Shepherd
+
+### Endpoint `GET /api/bonjour`
+
+Ajout d'un endpoint de test dans `server/src/router.ts` :
+
+```
+GET http://api.mfp.localhost/api/bonjour
+→ { "message": "Bonjour !" }
+```
+
+Après push sur `main`, la CI rebuild et pousse l'image `ghcr.io/volbix/mfp-api:latest` sur GHCR.
+
+### Approche polling avec Shepherd
+
+**Shepherd** vérifie toutes les minutes si de nouvelles images sont disponibles sur le registry et redémarre les containers concernés automatiquement.
+
+Ajouté dans `compose.traefik.yml` :
+- Service `shepherd` avec `SLEEP_TIME=1m` et `FILTER_SERVICES=label=autoupdate_enabled=true`
+- Label `autoupdate_enabled=true` sur `api` et `client` pour opt-in au CD automatique
+
+### Cycle CI/CD complet
+
+```
+1. Push code sur main
+2. GitHub Actions → tests → build image → push ghcr.io/volbix/mfp-api:latest
+3. Shepherd (toutes les 1min) → détecte nouvelle image → pull → redémarre le container
+4. L'API est mise à jour sans intervention manuelle
+```
+
+### Test de la CD
+
+```bash
+# Lancer le stack avec Shepherd
+docker compose -f compose.traefik.yml up -d
+
+# Observer les logs Shepherd
+docker compose -f compose.traefik.yml logs -f shepherd
+```
+
+Exemple de logs Shepherd (après détection d'une nouvelle image) :
+```
+shepherd    | Checking for updates for api
+shepherd    | Updating service api with image ghcr.io/volbix/mfp-api:latest
+shepherd    | Successfully updated api
+```
+
+---
+
 ## 6) Intégration continue (CI) avec GitHub Actions
 
 ### Structure
@@ -159,6 +323,8 @@ Le fichier `.github/workflows/ci.yml` déclenche la CI à chaque push ou PR sur 
 - `test-server` : installe les dépendances Node et exécute `npm test` (Jest)
 - `build-push-api` : build l'image Docker du serveur et la pousse sur GHCR (uniquement sur push, pas PR)
 - `build-push-client` : idem pour le client React
+
+![GitHub Actions — historique des runs](docs/workflow.png)
 
 **Résultat des tests en local :**
 
@@ -181,6 +347,8 @@ ghcr.io/volbix/mfp-api:latest
 ghcr.io/volbix/mfp-client:latest
 ```
 
+![GitHub Packages — images mfp-api et mfp-client publiées](docs/packages.png)
+
 ### Exercice 3 — `compose.prod.yml`
 
 Le fichier `compose.prod.yml` remplace les `build:` par des `image:` pointant vers GHCR :
@@ -200,6 +368,8 @@ Configuration dans GitHub > Settings > Branches > Branch protection rules :
 
 **Test de vérification :**  
 Casser volontairement `getDistance.ts` sur une branche → créer une PR → la CI échoue → merge impossible.
+
+![PR bloquée — tests KO sur le crash test](docs/failpush.png)
 
 ### Pour aller plus loin — Path filtering
 
