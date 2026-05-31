@@ -146,3 +146,64 @@ docker compose logs db
 docker compose logs api
 docker images | grep -E "my-favorite-places|server|client"
 ```
+
+---
+
+## 6) Intégration continue (CI) avec GitHub Actions
+
+### Structure
+
+Le fichier `.github/workflows/ci.yml` déclenche la CI à chaque push ou PR sur `main`/`master`.
+
+**Jobs :**
+- `test-server` : installe les dépendances Node et exécute `npm test` (Jest)
+- `build-push-api` : build l'image Docker du serveur et la pousse sur GHCR (uniquement sur push, pas PR)
+- `build-push-client` : idem pour le client React
+
+**Résultat des tests en local :**
+
+```
+> server@1.0.1 test
+> jest
+
+Test Suites: 1 passed, 1 total
+Tests:       2 passed, 2 total
+Snapshots:   0 total
+Time:        0.167 s
+```
+
+### Images publiées sur GHCR
+
+Après un push sur `main`, les images sont disponibles sur GitHub Container Registry :
+
+```
+ghcr.io/volbix/mfp-api:latest
+ghcr.io/volbix/mfp-client:latest
+```
+
+### Exercice 3 — `compose.prod.yml`
+
+Le fichier `compose.prod.yml` remplace les `build:` par des `image:` pointant vers GHCR :
+
+```bash
+docker compose -f compose.prod.yml up
+```
+
+Cela démarre les services en utilisant les images produites par la CI, sans recompiler localement.
+
+### Protection de la branche `main`
+
+Configuration dans GitHub > Settings > Branches > Branch protection rules :
+
+- Interdire les push directs sur `main`
+- Exiger que les tests CI passent avant de merger une PR
+
+**Test de vérification :**  
+Casser volontairement `getDistance.ts` sur une branche → créer une PR → la CI échoue → merge impossible.
+
+### Pour aller plus loin — Path filtering
+
+Le workflow ne rebuild que le service modifié en filtrant sur les chemins :
+
+- Modifications dans `server/**` → déclenche `test-server` + `build-push-api`
+- Modifications dans `client/**` → déclenche `build-push-client`
